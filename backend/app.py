@@ -17,6 +17,13 @@ app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10MB max
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
+# Try models in order until one works
+MODELS_TO_TRY = [
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-flash",
+    "gemini-pro",
+]
+
 def extract_text_from_pdf(pdf_path):
     doc = fitz.open(pdf_path)
     text = ""
@@ -50,7 +57,6 @@ def repair_json(raw):
 
 def analyze_with_gemini(resume_text, job_description):
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.0-flash")
 
     prompt = f"""
 You are an expert ATS (Applicant Tracking System) and resume analyst with 10+ years experience.
@@ -99,9 +105,24 @@ Return this EXACT JSON structure (all fields required):
 }}
 """
 
-    response = model.generate_content(prompt)
-    raw = response.text.strip()
-    return repair_json(raw)
+    last_error = None
+    for model_name in MODELS_TO_TRY:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            raw = response.text.strip()
+            return repair_json(raw)
+        except Exception as e:
+            last_error = e
+            error_str = str(e)
+            # If quota exceeded or model not found, try next model
+            if "429" in error_str or "quota" in error_str.lower() or "404" in error_str:
+                continue
+            # For other errors, raise immediately
+            raise e
+
+    # All models failed
+    raise Exception(f"All Gemini models failed. Last error: {last_error}")
 
 @app.route("/", methods=["GET"])
 def index():
@@ -143,10 +164,13 @@ def analyze():
         result = analyze_with_gemini(resume_text, job_description)
         return jsonify(result)
 
-    except ValueError as e:
+    except ValueError:
         return jsonify({"error": "AI response parsing failed. Please try again."}), 500
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        error_msg = str(e)
+        if "429" in error_msg or "quota" in error_msg.lower():
+            return jsonify({"error": "API quota exceeded. Please get a new Gemini API key from aistudio.google.com/app/apikey and update it in Render environment variables."}), 429
+        return jsonify({"error": error_msg}), 500
     finally:
         if os.path.exists(filepath):
             os.remove(filepath)
