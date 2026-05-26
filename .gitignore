@@ -1,0 +1,29 @@
+# Node
+node_modules/
+dist/
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+env/
+.venv/
+*.egg-info/
+
+# Env files
+.env
+.env.local
+.env.production
+
+# Uploads (temp files)
+backend/uploads/
+
+# Vite
+frontend/.vite/
+
+# IDE
+.vscode/
+.idea/
+*.swp
