@@ -2,272 +2,150 @@ import os
 import json
 import re
 import fitz
-import google.generativeai as genai
-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+from groq import Groq
 
 app = Flask(__name__)
 CORS(app)
 
-# -----------------------------------
-# Config
-# -----------------------------------
-
 UPLOAD_FOLDER = "uploads"
-
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10MB
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 
-MODEL_NAME = "gemini-2.0-flash"
-
-
-# -----------------------------------
-# Extract Text from PDF
-# -----------------------------------
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
 def extract_text_from_pdf(pdf_path):
-
+    doc = fitz.open(pdf_path)
     text = ""
-
-    try:
-        doc = fitz.open(pdf_path)
-
-        for page in doc:
-            text += page.get_text()
-
-        doc.close()
-
-    except Exception as e:
-        raise Exception(f"PDF extraction failed: {str(e)}")
-
+    for page in doc:
+        text += page.get_text()
+    doc.close()
     return text.strip()
 
-
-# -----------------------------------
-# Repair Gemini JSON
-# -----------------------------------
-
 def repair_json(raw):
-
     try:
         return json.loads(raw)
-
     except Exception:
         pass
-
-    cleaned = raw.strip()
-
-    cleaned = re.sub(r"^```json", "", cleaned)
-    cleaned = re.sub(r"^```", "", cleaned)
-    cleaned = re.sub(r"```$", "", cleaned)
-
-    cleaned = cleaned.strip()
-
+    cleaned = re.sub(r"^```[a-z]*\n?", "", raw.strip())
+    cleaned = re.sub(r"\n?```$", "", cleaned).strip()
     try:
         return json.loads(cleaned)
-
     except Exception:
         pass
-
-    match = re.search(r"\{[\s\S]*\}", cleaned)
-
+    match = re.search(r'\{[\s\S]*\}', cleaned)
     if match:
         try:
             return json.loads(match.group())
-
         except Exception:
             pass
+    raise ValueError("Could not parse AI response as JSON")
 
-    raise ValueError("Gemini returned invalid JSON")
+def analyze_with_groq(resume_text, job_description):
+    client = Groq(api_key=GROQ_API_KEY)
 
+    prompt = f"""You are an expert ATS (Applicant Tracking System) and resume analyst with 10+ years experience.
 
-# -----------------------------------
-# Gemini Analysis
-# -----------------------------------
-
-def analyze_with_gemini(resume_text, job_description):
-
-    api_key = os.getenv("GEMINI_API_KEY")
-
-    if not api_key:
-        raise Exception("GEMINI_API_KEY missing")
-
-    genai.configure(api_key=api_key)
-
-    prompt = f"""
-You are an expert ATS resume analyzer.
-
-Analyze the resume against the job description.
-
-Return ONLY valid JSON.
+Analyze the following resume against the job description carefully and return ONLY a valid JSON object.
+No markdown, no code fences, no extra text — just raw JSON.
 
 Resume:
-{resume_text[:2500]}
+{resume_text}
 
 Job Description:
-{job_description[:1000]}
+{job_description}
 
-Return JSON in this exact format:
-
+Return this EXACT JSON structure (all fields required):
 {{
-  "ats_score": 0,
-  "job_match_percent": 0,
-  "summary": "",
-  "strengths": [],
-  "weaknesses": [],
-  "missing_skills": [],
-  "matched_skills": [],
-  "suggestions": []
-}}
-"""
+  "ats_score": <integer 0-100>,
+  "job_match_percent": <integer 0-100>,
+  "summary": "<2-3 sentence professional resume summary>",
+  "strengths": ["<strength 1>", "<strength 2>", "<strength 3>"],
+  "weaknesses": ["<weakness 1>", "<weakness 2>", "<weakness 3>"],
+  "missing_skills": ["<skill 1>", "<skill 2>", "<skill 3>", "<skill 4>", "<skill 5>"],
+  "matched_skills": ["<skill 1>", "<skill 2>", "<skill 3>", "<skill 4>"],
+  "suggestions": [
+    {{"title": "<short title>", "description": "<detailed actionable suggestion>"}},
+    {{"title": "<short title>", "description": "<detailed actionable suggestion>"}},
+    {{"title": "<short title>", "description": "<detailed actionable suggestion>"}},
+    {{"title": "<short title>", "description": "<detailed actionable suggestion>"}}
+  ],
+  "keyword_density": <integer 0-100>,
+  "formatting_score": <integer 0-100>,
+  "experience_relevance": <integer 0-100>,
+  "role_match": "<Best matching job role based on resume>",
+  "multi_role_recommendations": [
+    {{"role": "<role name>", "match": <integer 0-100>, "reason": "<one sentence why>"}},
+    {{"role": "<role name>", "match": <integer 0-100>, "reason": "<one sentence why>"}},
+    {{"role": "<role name>", "match": <integer 0-100>, "reason": "<one sentence why>"}}
+  ],
+  "skill_gap_analysis": [
+    {{"skill": "<skill name>", "importance": "<High|Medium|Low>", "how_to_learn": "<resource or tip>"}},
+    {{"skill": "<skill name>", "importance": "<High|Medium|Low>", "how_to_learn": "<resource or tip>"}},
+    {{"skill": "<skill name>", "importance": "<High|Medium|Low>", "how_to_learn": "<resource or tip>"}}
+  ],
+  "rewritten_summary": "<AI-rewritten professional summary optimized for ATS — 3-4 sentences>",
+  "experience_years": <estimated integer years of experience>,
+  "education_score": <integer 0-100>
+}}"""
 
-    try:
-
-        model = genai.GenerativeModel(MODEL_NAME)
-
-        response = model.generate_content(prompt)
-
-        raw = response.text.strip()
-
-        return repair_json(raw)
-
-    except Exception as e:
-
-        raise Exception(str(e))
-
-
-# -----------------------------------
-# Home Route
-# -----------------------------------
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        max_tokens=2000,
+    )
+    raw = response.choices[0].message.content.strip()
+    return repair_json(raw)
 
 @app.route("/", methods=["GET"])
-def home():
-
-    return jsonify({
-        "status": "ok",
-        "message": "Resume Analyzer Backend Running 🚀"
-    })
-
-
-# -----------------------------------
-# Health Route
-# -----------------------------------
+def index():
+    return jsonify({"message": "ResumeAI Backend is running 🚀", "status": "ok"})
 
 @app.route("/health", methods=["GET"])
 def health():
-
-    return jsonify({
-        "status": "ok",
-        "model": MODEL_NAME,
-        "gemini_key_exists": bool(os.getenv("GEMINI_API_KEY"))
-    })
-
-
-# -----------------------------------
-# Analyze Route
-# -----------------------------------
+    return jsonify({"status": "ok"})
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
-
-    if not os.getenv("GEMINI_API_KEY"):
-
-        return jsonify({
-            "error": "GEMINI_API_KEY not configured"
-        }), 500
+    if not GROQ_API_KEY:
+        return jsonify({"error": "GROQ_API_KEY not configured on server."}), 500
 
     if "resume" not in request.files:
-
-        return jsonify({
-            "error": "Resume file missing"
-        }), 400
+        return jsonify({"error": "No resume file uploaded."}), 400
 
     file = request.files["resume"]
-
-    if file.filename == "":
-
-        return jsonify({
-            "error": "No file selected"
-        }), 400
-
-    if not file.filename.lower().endswith(".pdf"):
-
-        return jsonify({
-            "error": "Only PDF files are supported"
-        }), 400
-
     job_description = request.form.get("job_description", "").strip()
 
+    if file.filename == "":
+        return jsonify({"error": "No file selected."}), 400
+    if not file.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "Only PDF files are supported."}), 400
     if not job_description:
-
-        return jsonify({
-            "error": "Job description is required"
-        }), 400
+        return jsonify({"error": "Job description is required."}), 400
 
     filename = secure_filename(file.filename)
-
-    filepath = os.path.join(
-        app.config["UPLOAD_FOLDER"],
-        filename
-    )
-
+    filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
     file.save(filepath)
 
     try:
-
         resume_text = extract_text_from_pdf(filepath)
-
         if not resume_text:
+            return jsonify({"error": "Could not extract text from PDF. Ensure it is not scanned/image-based."}), 400
 
-            return jsonify({
-                "error": "Could not extract text from PDF"
-            }), 400
-
-        result = analyze_with_gemini(
-            resume_text,
-            job_description
-        )
-
+        result = analyze_with_groq(resume_text, job_description)
         return jsonify(result)
 
-    except ValueError as e:
-
-        return jsonify({
-            "error": str(e)
-        }), 500
-
+    except ValueError:
+        return jsonify({"error": "AI response parsing failed. Please try again."}), 500
     except Exception as e:
-
-        error_text = str(e)
-
-        if "429" in error_text or "quota" in error_text.lower():
-
-            return jsonify({
-                "error": "Gemini API quota exceeded. Please use another API key."
-            }), 429
-
-        return jsonify({
-            "error": error_text
-        }), 500
-
+        return jsonify({"error": str(e)}), 500
     finally:
-
         if os.path.exists(filepath):
             os.remove(filepath)
 
-
-# -----------------------------------
-# Run App
-# -----------------------------------
-
 if __name__ == "__main__":
-
-    app.run(
-        host="0.0.0.0",
-        port=5000,
-        debug=False
-    )
+    app.run(debug=False, host="0.0.0.0", port=5000)
