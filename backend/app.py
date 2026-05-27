@@ -1,8 +1,10 @@
+````python
 import os
 import json
 import re
-import fitz  # PyMuPDF
+import fitz
 import google.generativeai as genai
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -10,9 +12,10 @@ from werkzeug.utils import secure_filename
 app = Flask(__name__)
 CORS(app)
 
-# -----------------------------
+# -----------------------------------
 # Config
-# -----------------------------
+# -----------------------------------
+
 UPLOAD_FOLDER = "uploads"
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -20,10 +23,13 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10MB
 
+MODEL_NAME = "gemini-2.0-flash"
 
-# -----------------------------
-# Extract text from PDF
-# -----------------------------
+
+# -----------------------------------
+# Extract Text from PDF
+# -----------------------------------
+
 def extract_text_from_pdf(pdf_path):
 
     text = ""
@@ -42,9 +48,10 @@ def extract_text_from_pdf(pdf_path):
     return text.strip()
 
 
-# -----------------------------
-# Clean Gemini JSON
-# -----------------------------
+# -----------------------------------
+# Repair Gemini JSON
+# -----------------------------------
+
 def repair_json(raw):
 
     try:
@@ -79,9 +86,10 @@ def repair_json(raw):
     raise ValueError("Gemini returned invalid JSON")
 
 
-# -----------------------------
+# -----------------------------------
 # Gemini Analysis
-# -----------------------------
+# -----------------------------------
+
 def analyze_with_gemini(resume_text, job_description):
 
     api_key = os.getenv("GEMINI_API_KEY")
@@ -91,10 +99,10 @@ def analyze_with_gemini(resume_text, job_description):
 
     genai.configure(api_key=api_key)
 
-    model = genai.GenerativeModel("gemini-1.5-flash")
-
     prompt = f"""
-Analyze this resume against the given job description.
+You are an expert ATS resume analyzer.
+
+Analyze the resume against the job description.
 
 Return ONLY valid JSON.
 
@@ -104,7 +112,7 @@ Resume:
 Job Description:
 {job_description[:2000]}
 
-Return JSON in this format:
+Return JSON in this exact format:
 
 {{
   "ats_score": 0,
@@ -120,6 +128,8 @@ Return JSON in this format:
 
     try:
 
+        model = genai.GenerativeModel(MODEL_NAME)
+
         response = model.generate_content(prompt)
 
         raw = response.text.strip()
@@ -131,9 +141,10 @@ Return JSON in this format:
         raise Exception(str(e))
 
 
-# -----------------------------
+# -----------------------------------
 # Home Route
-# -----------------------------
+# -----------------------------------
+
 @app.route("/", methods=["GET"])
 def home():
 
@@ -143,21 +154,24 @@ def home():
     })
 
 
-# -----------------------------
+# -----------------------------------
 # Health Route
-# -----------------------------
+# -----------------------------------
+
 @app.route("/health", methods=["GET"])
 def health():
 
     return jsonify({
         "status": "ok",
+        "model": MODEL_NAME,
         "gemini_key_exists": bool(os.getenv("GEMINI_API_KEY"))
     })
 
 
-# -----------------------------
+# -----------------------------------
 # Analyze Route
-# -----------------------------
+# -----------------------------------
+
 @app.route("/analyze", methods=["POST"])
 def analyze():
 
@@ -234,7 +248,7 @@ def analyze():
         if "429" in error_text or "quota" in error_text.lower():
 
             return jsonify({
-                "error": "Gemini API quota exceeded. Use a new API key."
+                "error": "Gemini API quota exceeded. Please use another API key."
             }), 429
 
         return jsonify({
@@ -247,9 +261,10 @@ def analyze():
             os.remove(filepath)
 
 
-# -----------------------------
+# -----------------------------------
 # Run App
-# -----------------------------
+# -----------------------------------
+
 if __name__ == "__main__":
 
     app.run(
@@ -257,3 +272,4 @@ if __name__ == "__main__":
         port=5000,
         debug=False
     )
+````
