@@ -106,10 +106,10 @@ Analyze the resume against the job description.
 Return ONLY valid JSON.
 
 Resume:
-{resume_text[:5000]}
+{resume_text[:2500]}
 
 Job Description:
-{job_description[:2000]}
+{job_description[:1000]}
 
 Return JSON in this exact format:
 
