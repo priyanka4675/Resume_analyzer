@@ -1,4 +1,3 @@
-````python
 import os
 import json
 import re
@@ -11,7 +10,11 @@ from werkzeug.utils import secure_filename
 app = Flask(__name__)
 CORS(app)
 
+# -----------------------------
+# Config
+# -----------------------------
 UPLOAD_FOLDER = "uploads"
+
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
@@ -22,6 +25,7 @@ app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10MB
 # Extract text from PDF
 # -----------------------------
 def extract_text_from_pdf(pdf_path):
+
     text = ""
 
     try:
@@ -33,24 +37,29 @@ def extract_text_from_pdf(pdf_path):
         doc.close()
 
     except Exception as e:
-        raise Exception(f"PDF reading failed: {str(e)}")
+        raise Exception(f"PDF extraction failed: {str(e)}")
 
     return text.strip()
 
 
 # -----------------------------
-# Clean Gemini JSON response
+# Clean Gemini JSON
 # -----------------------------
 def repair_json(raw):
+
     try:
         return json.loads(raw)
 
     except Exception:
         pass
 
-    cleaned = re.sub(r"^```json", "", raw.strip())
+    cleaned = raw.strip()
+
+    cleaned = re.sub(r"^```json", "", cleaned)
     cleaned = re.sub(r"^```", "", cleaned)
-    cleaned = re.sub(r"```$", "", cleaned).strip()
+    cleaned = re.sub(r"```$", "", cleaned)
+
+    cleaned = cleaned.strip()
 
     try:
         return json.loads(cleaned)
@@ -67,7 +76,7 @@ def repair_json(raw):
         except Exception:
             pass
 
-    raise ValueError("Invalid JSON returned by Gemini")
+    raise ValueError("Gemini returned invalid JSON")
 
 
 # -----------------------------
@@ -84,19 +93,18 @@ def analyze_with_gemini(resume_text, job_description):
 
     model = genai.GenerativeModel("gemini-1.5-flash")
 
-    # Smaller prompt to reduce quota usage
     prompt = f"""
-Analyze this resume against the job description.
+Analyze this resume against the given job description.
 
 Return ONLY valid JSON.
 
 Resume:
-{resume_text[:6000]}
+{resume_text[:5000]}
 
 Job Description:
 {job_description[:2000]}
 
-JSON format:
+Return JSON in this format:
 
 {{
   "ats_score": 0,
@@ -111,6 +119,7 @@ JSON format:
 """
 
     try:
+
         response = model.generate_content(prompt)
 
         raw = response.text.strip()
@@ -118,6 +127,7 @@ JSON format:
         return repair_json(raw)
 
     except Exception as e:
+
         raise Exception(str(e))
 
 
@@ -126,6 +136,7 @@ JSON format:
 # -----------------------------
 @app.route("/", methods=["GET"])
 def home():
+
     return jsonify({
         "status": "ok",
         "message": "Resume Analyzer Backend Running 🚀"
@@ -137,6 +148,7 @@ def home():
 # -----------------------------
 @app.route("/health", methods=["GET"])
 def health():
+
     return jsonify({
         "status": "ok",
         "gemini_key_exists": bool(os.getenv("GEMINI_API_KEY"))
@@ -150,11 +162,13 @@ def health():
 def analyze():
 
     if not os.getenv("GEMINI_API_KEY"):
+
         return jsonify({
             "error": "GEMINI_API_KEY not configured"
         }), 500
 
     if "resume" not in request.files:
+
         return jsonify({
             "error": "Resume file missing"
         }), 400
@@ -162,32 +176,40 @@ def analyze():
     file = request.files["resume"]
 
     if file.filename == "":
+
         return jsonify({
             "error": "No file selected"
         }), 400
 
     if not file.filename.lower().endswith(".pdf"):
+
         return jsonify({
-            "error": "Only PDF files supported"
+            "error": "Only PDF files are supported"
         }), 400
 
     job_description = request.form.get("job_description", "").strip()
 
     if not job_description:
+
         return jsonify({
-            "error": "Job description required"
+            "error": "Job description is required"
         }), 400
 
     filename = secure_filename(file.filename)
 
-    filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+    filepath = os.path.join(
+        app.config["UPLOAD_FOLDER"],
+        filename
+    )
 
     file.save(filepath)
 
     try:
+
         resume_text = extract_text_from_pdf(filepath)
 
         if not resume_text:
+
             return jsonify({
                 "error": "Could not extract text from PDF"
             }), 400
@@ -200,6 +222,7 @@ def analyze():
         return jsonify(result)
 
     except ValueError as e:
+
         return jsonify({
             "error": str(e)
         }), 500
@@ -209,8 +232,9 @@ def analyze():
         error_text = str(e)
 
         if "429" in error_text or "quota" in error_text.lower():
+
             return jsonify({
-                "error": "Gemini API quota exceeded. Please use a new API key."
+                "error": "Gemini API quota exceeded. Use a new API key."
             }), 429
 
         return jsonify({
@@ -218,6 +242,7 @@ def analyze():
         }), 500
 
     finally:
+
         if os.path.exists(filepath):
             os.remove(filepath)
 
@@ -226,9 +251,9 @@ def analyze():
 # Run App
 # -----------------------------
 if __name__ == "__main__":
+
     app.run(
         host="0.0.0.0",
         port=5000,
         debug=False
     )
-````
